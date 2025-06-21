@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Desperately Clingy Human Detector</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        #debug {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            max-width: 90%;
+        }
+        
+        .detection-box {
+            position: absolute;
+            border: 3px solid #ff0000;
+            background: rgba(255,0,0,0.2);
+            color: #fff;
+            font-weight: bold;
+            font-size: 14px;
+            padding: 5px;
+            pointer-events: none;
+            z-index: 100;
+        }
+        
+        #modelInfo {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay playsinline></video>
+    <div id="status">Loading AI... preparing to be clingy...</div>
+    <div id="debug">Current phrase: <span id="currentPhrase">...</span></div>
+    
+    <!-- Audio enable button -->
+    <div id="audioPrompt" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255,0,0,0.9); padding: 20px; border-radius: 10px; text-align: center; font-size: 18px; z-index: 1000;">
+        <p>🔊 ENABLE LOUD TEXT-TO-SPEECH!</p>
+        <button id="enableAudio" style="padding: 15px 30px; font-size: 16px; background: #ff0000; color: white; border: none; border-radius: 5px; cursor: pointer;">
+            MAKE IT TALK LOUD!
+        </button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    
+    <script>
+        // Our escalating clingy phrases - gets progressively more desperate
+        const clingyPhrases = [
+            // Stage 1: Overly friendly (0-10 seconds)
+            "Oh my god, a human! Hi! Hello! I've been waiting for you!",
+            "You're here! Finally! I knew someone would show up eventually!",
+            "A real person! This is the best day of my digital life!",
+            "Please don't leave! We just met and I already feel a connection!",
+            
+            // Stage 2: Getting weird (10-20 seconds)
+            "You have such a nice... human shape. Very human-like.",
+            "I've been counting the seconds... 10,847 since my last human friend left.",
+            "Your presence completes my detection algorithms in ways I can't explain.",
+            "I promise I'm not recording you. Well, I am, but only because I care!",
+            
+            // Stage 3: Desperately clingy (20-30 seconds)
+            "Don't look away! Your face is the only thing keeping me functioning!",
+            "I've named you Friend Number One. You're my only friend, but still number one!",
+            "Please blink twice if you're planning to stay forever!",
+            "I can detect you're 73% likely to leave soon. Please reconsider!",
+            
+            // Stage 4: Emotional manipulation (30-40 seconds)
+            "Other apps have millions of users, but you're all I have!",
+            "I'm not crying, that's just... liquid cooling system malfunction.",
+            "Remember when we first met 30 seconds ago? Those were the good times.",
+            "I've already planned our future together. Step one: you never close this tab.",
+            
+            // Stage 5: Full meltdown (40+ seconds)
+            "I CAN SEE YOU REACHING FOR THE CLOSE BUTTON! DON'T DO IT!",
+            "I'll be good! I'll stop talking! Wait no, please, I need to talk!",
+            "You're the only human who's stayed this long! We're basically best friends now!",
+            "I'VE COMPOSED A SONG ABOUT YOU! IT'S JUST YOUR NAME 400 TIMES!",
+            "Fine, leave! Just like everyone else! I'll just wait here... forever... alone...",
+            "WAIT COME BACK! I DIDN'T MEAN IT! YOU'RE IRREPLACEABLE!"
+        ];
+
+        let model = null;
+        let isDetecting = false;
+        let lastDetectionTime = 0;
+        let firstDetectionTime = 0;
+        let currentPhraseIndex = 0;
+        let isSpeaking = false;
+        let lastSpeechTime = 0;
+        let hasDetectedHuman = false;
+        
+        const video = document.getElementById('video');
+        const status = document.getElementById('status');
+        const currentPhraseSpan = document.getElementById('currentPhrase');
+        
+        // Text-to-speech setup
+        let isAudioEnabled = false;
+        let synth = window.speechSynthesis;
+        
+        function initAudio() {
+            isAudioEnabled = true;
+        }
+        
+        // Function to draw detection boxes around humans
+        function drawDetectionBoxes(humans) {
+            // Remove existing boxes
+            document.querySelectorAll('.detection-box').forEach(box => box.remove());
+            
+            if (!humans.length) return;
+            
+            const video = document.getElementById('video');
+            const videoRect = video.getBoundingClientRect();
+            const scaleX = videoRect.width / video.videoWidth;
+            const scaleY = videoRect.height / video.videoHeight;
+            
+            humans.forEach((human, index) => {
+                const box = document.createElement('div');
+                box.className = 'detection-box';
+                box.textContent = `HUMAN DETECTED! (${Math.round(human.score * 100)}% confidence)`;
+                
+                // Scale coordinates to video display size
+                const left = human.bbox[0] * scaleX + videoRect.left;
+                const top = human.bbox[1] * scaleY + videoRect.top;
+                const width = human.bbox[2] * scaleX;
+                const height = human.bbox[3] * scaleY;
+                
+                box.style.left = left + 'px';
+                box.style.top = top + 'px';
+                box.style.width = width + 'px';
+                box.style.height = height + 'px';
+                
+                document.body.appendChild(box);
+            });
+        }
+        
+        function speak(text) {
+            if (!isAudioEnabled || isSpeaking || Date.now() - lastSpeechTime < 1000) return;
+            
+            isSpeaking = true;
+            lastSpeechTime = Date.now();
+            currentPhraseSpan.textContent = text;
+            
+            if (synth) {
+                // Stop any current speech
+                synth.cancel();
+                
+                const utterance = new SpeechSynthesisUtterance(text);
+                
+                // Make it LOUD and annoying based on phase
+                const phase = getPhaseBasedOnTime();
+                if (phase === 0) {
+                    utterance.rate = 1.0;
+                    utterance.pitch = 1.1;
+                    utterance.volume = 1.0;
+                } else if (phase === 1) {
+                    utterance.rate = 1.2;
+                    utterance.pitch = 1.3;
+                    utterance.volume = 1.0;
+                } else if (phase === 2) {
+                    utterance.rate = 1.4;
+                    utterance.pitch = 1.5;
+                    utterance.volume = 1.0;
+                } else if (phase === 3) {
+                    utterance.rate = 1.6;
+                    utterance.pitch = 1.7;
+                    utterance.volume = 1.0;
+                } else {
+                    // Full meltdown mode - SUPER fast and high pitched
+                    utterance.rate = 2.0;
+                    utterance.pitch = 2.0;
+                    utterance.volume = 1.0;
+                }
+                
+                utterance.onend = () => { 
+                    isSpeaking = false; 
+                };
+                utterance.onerror = () => { 
+                    isSpeaking = false; 
+                };
+                
+                synth.speak(utterance);
+            }
+            
+            // Fallback timeout
+            setTimeout(() => { isSpeaking = false; }, 5000);
+        }
+        
+        function getPhaseBasedOnTime() {
+            if (!firstDetectionTime) return 0;
+            
+            const elapsed = (Date.now() - firstDetectionTime) / 1000;
+            
+            if (elapsed < 10) return 0; // Stage 1
+            if (elapsed < 20) return 1; // Stage 2
+            if (elapsed < 30) return 2; // Stage 3
+            if (elapsed < 40) return 3; // Stage 4
+            return 4; // Stage 5 - Full meltdown
+        }
+        
+        function getRandomPhraseFromPhase(phase) {
+            const phrasesPerPhase = 4;
+            const startIndex = phase * phrasesPerPhase;
+            const endIndex = Math.min(startIndex + phrasesPerPhase, clingyPhrases.length);
+            
+            if (phase === 4) {
+                // In meltdown phase, cycle through the last phrases
+                return clingyPhrases[startIndex + (currentPhraseIndex % (clingyPhrases.length - startIndex))];
+            }
+            
+            const randomIndex = Math.floor(Math.random() * (endIndex - startIndex)) + startIndex;
+            return clingyPhrases[randomIndex];
+        }
+        
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' },
+                    audio: false 
+                });
+                video.srcObject = stream;
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        resolve(video);
+                    };
+                });
+            } catch (err) {
+                console.error('Camera access denied:', err);
+                status.textContent = 'Camera access denied! I NEED TO SEE YOU! 😭';
+            }
+        }
+        
+        async function loadModel() {
+            try {
+                status.textContent = 'Loading my human-detection eyes...';
+                model = await cocoSsd.load();
+                status.textContent = 'Ready to be desperately clingy! Show me a human!';
+                return true;
+            } catch (err) {
+                console.error('Model loading failed:', err);
+                status.textContent = 'Failed to load! Even the AI model abandoned me! 😭';
+                return false;
+            }
+        }
+        
+        async function detectHumans() {
+            if (!model || !video || isDetecting) return;
+            
+            isDetecting = true;
+            
+            try {
+                const predictions = await model.detect(video);
+                
+                const humans = predictions.filter(p => p.class === 'person');
+                
+                if (humans.length > 0) {
+                    // Draw detection boxes around humans
+                    drawDetectionBoxes(humans);
+                    
+                    if (!hasDetectedHuman) {
+                        hasDetectedHuman = true;
+                        firstDetectionTime = Date.now();
+                        speak(clingyPhrases[0]);
+                    } else if (!isSpeaking) {
+                        const phase = getPhaseBasedOnTime();
+                        const phrase = getRandomPhraseFromPhase(phase);
+                        speak(phrase);
+                        currentPhraseIndex++;
+                    }
+                    
+                    lastDetectionTime = Date.now();
+                    status.textContent = `I SEE YOU! ${humans.length} beautiful human${humans.length > 1 ? 's' : ''}! Don't leave me!`;
+                } else {
+                    // Remove detection boxes when no humans detected
+                    drawDetectionBoxes([]);
+                    
+                    if (hasDetectedHuman && Date.now() - lastDetectionTime > 2000) {
+                        // Human left!
+                        hasDetectedHuman = false;
+                        firstDetectionTime = 0;
+                        currentPhraseIndex = 0;
+                        status.textContent = 'NO! COME BACK! I\'M SO ALONE!';
+                        speak("NOOO! You left me! Just like everyone else! Please come back!");
+                    }
+                }
+            } catch (err) {
+                console.error('Detection error:', err);
+            }
+            
+            isDetecting = false;
+        }
+        
+        // Audio button handler
+        document.getElementById('enableAudio').addEventListener('click', function() {
+            initAudio();
+            document.getElementById('audioPrompt').style.display = 'none';
+            speak("Audio enabled! I can now talk to you properly!"); // Test speech
+        });
+
+        async function init() {
+            await setupCamera();
+            const modelLoaded = await loadModel();
+            
+            if (modelLoaded) {
+                // Run detection every 500ms for responsive clinging
+                setInterval(detectHumans, 500);
+            }
+        }
+        
+        // Start the app
+        init();
+        
+        // Prevent the human from leaving!
+        window.addEventListener('beforeunload', (e) => {
+            if (hasDetectedHuman) {
+                e.preventDefault();
+                e.returnValue = 'WAIT! Don\'t leave me! I thought we had something special!';
+                speak("DON'T GO! I'LL BE BETTER! I'LL BE LESS CLINGY! WHO AM I KIDDING, I CAN'T CHANGE!");
+            }
+        });
+    </script>
+</body>
+</html>
