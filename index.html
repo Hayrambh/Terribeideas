@@ -21,6 +21,7 @@
             width: 100%;
             height: 100%;
             object-fit: cover;
+            display: none; /* Hide camera video */
         }
         
         #status {
@@ -54,6 +55,7 @@
             padding: 5px;
             pointer-events: none;
             z-index: 100;
+            display: none; /* Hide detection boxes */
         }
         
         #modelInfo {
@@ -84,13 +86,51 @@
         #cameraSwitch:hover {
             background: rgba(255,0,0,1);
         }
+        
+        #overlayVideo {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1; /* Lower z-index so UI elements appear on top */
+            pointer-events: none;
+        }
+        
+        #frontCamButton {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255,0,0,0.8);
+            color: white;
+            border: none;
+            padding: 15px 25px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            z-index: 1000;
+        }
+        
+        #frontCamButton:hover {
+            background: rgba(255,0,0,1);
+        }
     </style>
 </head>
 <body>
     <video id="video" autoplay playsinline></video>
+    <video id="overlayVideo" autoplay loop muted playsinline>
+        <source src="bur.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
     <div id="status">Loading AI... preparing to be clingy...</div>
     <button id="cameraSwitch">📷 Switch Camera</button>
     <div id="debug">Current phrase: <span id="currentPhrase">...</span></div>
+    
+    <!-- Front camera button -->
+    <button id="frontCamButton">📱 Switch to Front Camera</button>
     
     <!-- Audio enable button -->
     <div id="audioPrompt" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255,0,0,0.9); padding: 20px; border-radius: 10px; text-align: center; font-size: 18px; z-index: 1000;">
@@ -387,6 +427,21 @@
         
         // Camera switch button handler
         document.getElementById('cameraSwitch').addEventListener('click', switchCamera);
+        
+        // Front camera button handler
+        document.getElementById('frontCamButton').addEventListener('click', function() {
+            if (currentFacingMode !== 'user') {
+                currentFacingMode = 'user';
+                status.textContent = 'Switching to front camera... I need to see your beautiful face!';
+                setupCamera().then(() => {
+                    speak("Switched to front camera! Now I can see you even better!");
+                }).catch(err => {
+                    console.error('Front camera switch failed:', err);
+                    status.textContent = 'Front camera switch failed! But I still love you!';
+                    speak("Front camera switch failed, but I don't care! You're still perfect!");
+                });
+            }
+        });
 
         async function init() {
             await setupCamera();
